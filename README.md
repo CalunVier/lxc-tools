@@ -9,7 +9,7 @@ Bash experts are welcome to optimize the code.
 Currently, only TCP connections are supported (I haven’t reviewed the UDP code yet).
 
 ## Dependencies
-- socat
+- socat (Both container and host need to be installed)
 - getopt
 
 ## Usage
