@@ -17,3 +17,10 @@ Usage: lxc-proxy -n NAME [-l [ADDR:]PORT] [-d [ADDR:]PORT]
   -d, --destination  容器内目标地址和端口，格式 addr:port 或 port（默认 127.0.0.1:PORT）
   -h, --help         显示此帮助
 ```
+
+例如，将容器中的22端口映射到主机的2222上
+
+```
+# lxc-proxy -n container_name -l 2222 -d 22
+Starting port forwarding: Host [0.0.0.0:2222] → Container container_name [127.0.0.1:22]
+```

@@ -20,3 +20,10 @@ Usage: $(basename "$0") -n NAME [-l [ADDR:]PORT] [-d [ADDR:]PORT]
   -d, --destination  Destination address and port inside container, format addr:port or port (default 127.0.0.1:PORT)
   -h, --help         Show this help message
   ```
+
+For example, to map port 22 in a container to 2222 on a host
+
+```
+# lxc-proxy -n container_name -l 2222 -d 22
+Starting port forwarding: Host [0.0.0.0:2222] → Container container_name [127.0.0.1:22]
+```
