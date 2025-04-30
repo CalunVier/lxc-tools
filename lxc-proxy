@@ -1,0 +1,99 @@
+#!/bin/bash
+set -euo pipefail
+
+print_usage() {
+  cat <<EOF
+Usage: $(basename "$0") -n NAME [-l [ADDR:]PORT] [-d [ADDR:]PORT]
+  -n, --name         LXC container name (required)
+  -l, --listen       Local listen address and port, format addr:port or port (default 0.0.0.0:PORT)
+  -d, --destination  Destination address and port inside container, format addr:port or port (default 127.0.0.1:PORT)
+  -h, --help         Show this help message
+EOF
+}
+
+# Default values
+listen_addr="0.0.0.0"
+dest_addr="127.0.0.1"
+
+# Parse arguments
+# Note: Requires GNU getopt
+ARGS=$(getopt -o n:l:d:h --long name:,listen:,destination:,help -n "$(basename "$0")" -- "$@")
+if [ $? -ne 0 ]; then
+  print_usage
+  exit 2
+fi
+eval set -- "$ARGS"
+
+container_name=""
+listen_spec=""
+dest_spec=""
+
+while true; do
+  case "$1" in
+    -n|--name)
+      container_name="$2"
+      shift 2
+      ;;
+    -l|--listen)
+      listen_spec="$2"
+      shift 2
+      ;;
+    -d|--destination)
+      dest_spec="$2"
+      shift 2
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      print_usage
+      exit 3
+      ;;
+  esac
+done
+
+# Check required fields
+if [ -z "$container_name" ]; then
+  echo "Error: Container name must be specified (-n)." >&2
+  print_usage
+  exit 1
+fi
+
+# Parse listen_spec
+if [ -n "$listen_spec" ]; then
+  if [[ "$listen_spec" == *:* ]]; then
+    listen_addr=${listen_spec%%:*}
+    listen_port=${listen_spec##*:}
+  else
+    listen_port=$listen_spec
+  fi
+else
+  echo "Error: Listen port must be specified (-l)." >&2
+  print_usage
+  exit 1
+fi
+
+# Parse dest_spec
+if [ -n "$dest_spec" ]; then
+  if [[ "$dest_spec" == *:* ]]; then
+    dest_addr=${dest_spec%%:*}
+    dest_port=${dest_spec##*:}
+  else
+    dest_port=$dest_spec
+  fi
+else
+  # If not specified, default to container's port 22
+  dest_port=22
+fi
+
+# Final command
+echo "Starting port forwarding: Host [${listen_addr}:${listen_port}] → Container ${container_name} [${dest_addr}:${dest_port}]"
+exec socat \
+  TCP4-LISTEN:"${listen_port}",bind="${listen_addr}",reuseaddr,fork \
+  EXEC:"/bin/lxc-attach -n ${container_name} -- 'socat STDIO TCP4:${dest_addr}:${dest_port}'"
