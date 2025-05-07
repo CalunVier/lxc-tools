@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CGROUP_BASE="/sys/fs/cgroup"
+
+# Print help information
+print_help() {
+    cat <<EOF
+usage: $(basename "$0") [--help] [-h] [-b] [-k] [-m] [-g] [--si] container
+
+Report LXC container memory usage (like 'free').
+
+positional arguments:
+  container    LXC container name or full cgroup path
+
+optional arguments:
+  --help       show help and exit
+  -h, --human  human-readable output (e.g. 512.0M)
+  -b, --bytes  show output in bytes
+  -k, --kibi   show output in KiB (default)
+  -m, --mebi   show output in MiB
+  -g, --gibi   show output in GiB
+  --si         use powers of 1000 not 1024
+EOF
+    exit 0
+}
+
+# Read numeric value from cgroup file ("max" means unlimited -> empty)
+read_value() {
+    local path="$1"
+    [[ -r "$path" ]] || { echo ''; return; }
+    local val
+    val=$(<"$path")
+    val="${val//[[:space:]]/}"
+    [[ "$val" == "max" ]] && echo '' || echo "$val"
+}
+
+# Auto-format output (one decimal place)
+auto_format() {
+    local bytes="$1" si="$2"
+    local base=$(( si ? 1000 : 1024 ))
+    local units=(B K M G T P)
+    local i=0
+    local size="$bytes"
+    local max_i=$(( ${#units[@]} - 1 ))
+
+    # Use awk for floating-point comparison
+    while [[ $(awk "BEGIN{print ($size >= $base)}") -eq 1 && i -lt max_i ]]; do
+        size=$(awk "BEGIN{printf \"%.6f\", $size/$base}")
+        ((i++))
+    done
+    printf "%.1f%s" "$size" "${units[i]}"
+}
+
+# Format to specific unit (rounded integer)
+unit_format() {
+    local bytes="$1" unit="${2^^}" si="$3"
+    local base=$(( si ? 1000 : 1024 ))
+    local factor
+    case "$unit" in
+        B) factor=1 ;;
+        K) factor=$base ;;
+        M) factor=$(( base * base )) ;;
+        G) factor=$(( base * base * base )) ;;
+        *) factor=$base ;;
+    esac
+    awk -v b="$bytes" -v f="$factor" 'BEGIN{printf "%.0f", b/f}'
+}
+
+# Default parameters
+human=0
+unit="K"
+si=0
+container=""
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--human) human=1; shift ;;  
+        -b|--bytes) unit="B"; shift ;;  
+        -k|--kibi)  unit="K"; shift ;;  
+        -m|--mebi)  unit="M"; shift ;;  
+        -g|--gibi)  unit="G"; shift ;;  
+        --si)       si=1; shift ;;  
+        --help)     print_help ;;  
+        -* ) echo "Unknown option: $1" >&2; print_help ;;  
+        * ) container="$1"; shift ;;  
+    esac
+done
+
+# Validate container argument
+[[ -n "$container" ]] || { echo "Error: container name or cgroup path must be specified." >&2; print_help; }
+
+# Determine cgroup path
+if [[ -d "$container" ]]; then
+    cg_path="$container"
+else
+    candidates=(
+        "$CGROUP_BASE/$container"
+        "$CGROUP_BASE/lxc.payload.$container"
+        "$CGROUP_BASE/lxc/$container"
+    )
+    cg_path=""
+    for cand in "${candidates[@]}"; do
+        [[ -d "$cand" ]] && { cg_path="$cand"; break; }
+    done
+    [[ -n "$cg_path" ]] || { echo "Error: cgroup path for '$container' not found." >&2; exit 1; }
+fi
+
+# Read stats
+mem_cur=$(read_value "$cg_path/memory.current")
+mem_max=$(read_value "$cg_path/memory.max")
+swap_cur=$(read_value "$cg_path/memory.swap.current")
+swap_max=$(read_value "$cg_path/memory.swap.max")
+
+# Calculate total, used, free
+calc() {
+    local cur="$1" mx="$2"
+    [[ -n "$cur" ]] || { echo "0 0 0"; return; }
+    local total="$([[ -n "$mx" ]] && echo "$mx" || echo "$cur")"
+    local used="$cur"
+    local free=$(( total - used ))
+    echo "$total $used $free"
+}
+read m_total m_used m_free < <(calc "$mem_cur" "$mem_max")
+read s_total s_used s_free < <(calc "$swap_cur" "$swap_max")
+
+# Choose formatting function
+fmt() {
+    [[ $human -eq 1 ]] && auto_format "$1" "$si" || unit_format "$1" "$unit" "$si"
+}
+
+# Print output
+w1=8; w=12
+printf "%${w1}s%${w}s%${w}s%${w}s\n" "" total used free
+printf "%-${w1}s%${w}s%${w}s%${w}s\n" "Mem:"  "$(fmt "$m_total")" "$(fmt "$m_used")" "$(fmt "$m_free")"
+printf "%-${w1}s%${w}s%${w}s%${w}s\n" "Swap:" "$(fmt "$s_total")" "$(fmt "$s_used")" "$(fmt "$s_free")"
