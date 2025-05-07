@@ -20,7 +20,7 @@ optional arguments:
   -k, --kibi   show output in KiB (default)
   -m, --mebi   show output in MiB
   -g, --gibi   show output in GiB
-  --si         use powers of 1000 not 1024
+      --si     use powers of 1000 not 1024
 EOF
     exit 0
 }
@@ -35,6 +35,10 @@ read_value() {
     [[ "$val" == "max" ]] && echo '' || echo "$val"
 }
 
+# Read system total memory and swap from /proc/meminfo
+SYSTEM_MEM_TOTAL=$(awk '/^MemTotal:/ {print $2 * 1024; exit}' /proc/meminfo)
+SYSTEM_SWAP_TOTAL=$(awk '/^SwapTotal:/ {print $2 * 1024; exit}' /proc/meminfo)
+
 # Auto-format output (one decimal place)
 auto_format() {
     local bytes="$1" si="$2"
@@ -43,8 +47,6 @@ auto_format() {
     local i=0
     local size="$bytes"
     local max_i=$(( ${#units[@]} - 1 ))
-
-    # Use awk for floating-point comparison
     while [[ $(awk "BEGIN{print ($size >= $base)}") -eq 1 && i -lt max_i ]]; do
         size=$(awk "BEGIN{printf \"%.6f\", $size/$base}")
         ((i++))
@@ -99,6 +101,9 @@ else
         "$CGROUP_BASE/$container"
         "$CGROUP_BASE/lxc.payload.$container"
         "$CGROUP_BASE/lxc/$container"
+        "$CGROUP_BASE/memory/$container"
+        "$CGROUP_BASE/memory/lxc.payload.$container"
+        "$CGROUP_BASE/memory/lxc/$container"
     )
     cg_path=""
     for cand in "${candidates[@]}"; do
@@ -107,17 +112,39 @@ else
     [[ -n "$cg_path" ]] || { echo "Error: cgroup path for '$container' not found." >&2; exit 1; }
 fi
 
-# Read stats
+# Read memory stats with v2, fallback to v1
 mem_cur=$(read_value "$cg_path/memory.current")
 mem_max=$(read_value "$cg_path/memory.max")
+if [[ -z "$mem_cur" && -r "$cg_path/memory.usage_in_bytes" ]]; then
+    mem_cur=$(read_value "$cg_path/memory.usage_in_bytes")
+    mem_max=$(read_value "$cg_path/memory.limit_in_bytes")
+    if [[ -n "$mem_max" && $mem_max -gt $SYSTEM_MEM_TOTAL ]]; then
+        mem_max=""
+    fi
+fi
+
+# Read swap stats with v2, fallback to v1
 swap_cur=$(read_value "$cg_path/memory.swap.current")
 swap_max=$(read_value "$cg_path/memory.swap.max")
+if [[ -z "$swap_cur" && -r "$cg_path/memory.memsw.usage_in_bytes" ]]; then
+    memsw_usage=$(read_value "$cg_path/memory.memsw.usage_in_bytes")
+    swap_cur=$(( memsw_usage - mem_cur ))
+    total_memsw=$(read_value "$cg_path/memory.memsw.limit_in_bytes")
+    if [[ -n "$total_memsw" ]]; then
+        # v1 swap limit = mem+swap limit minus memory limit
+        base_mem_limit=${mem_max:-$mem_cur}
+        swap_max=$(( total_memsw - base_mem_limit ))
+        [[ $swap_max -gt $SYSTEM_SWAP_TOTAL ]] && swap_max=""
+    else
+        swap_max=""
+    fi
+fi
 
 # Calculate total, used, free
 calc() {
     local cur="$1" mx="$2"
     [[ -n "$cur" ]] || { echo "0 0 0"; return; }
-    local total="$([[ -n "$mx" ]] && echo "$mx" || echo "$cur")"
+    local total="${mx:-$cur}"
     local used="$cur"
     local free=$(( total - used ))
     echo "$total $used $free"
@@ -132,6 +159,9 @@ fmt() {
 
 # Print output
 w1=8; w=12
-printf "%${w1}s%${w}s%${w}s%${w}s\n" "" total used free
-printf "%-${w1}s%${w}s%${w}s%${w}s\n" "Mem:"  "$(fmt "$m_total")" "$(fmt "$m_used")" "$(fmt "$m_free")"
-printf "%-${w1}s%${w}s%${w}s%${w}s\n" "Swap:" "$(fmt "$s_total")" "$(fmt "$s_used")" "$(fmt "$s_free")"
+printf "%${w1}s%${w}s%${w}s%${w}s
+" "" total used free
+printf "%-${w1}s%${w}s%${w}s%${w}s
+" "Mem:"  "$(fmt "$m_total")" "$(fmt "$m_used")" "$(fmt "$m_free")"
+printf "%-${w1}s%${w}s%${w}s%${w}s
+" "Swap:" "$(fmt "$s_total")" "$(fmt "$s_used")" "$(fmt "$s_free")"
