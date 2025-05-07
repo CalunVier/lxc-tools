@@ -1,6 +1,6 @@
 # lxc-tools
 
-[English](README.md) | [Simplified Chinese](README_cn.md)
+[English](README.md) | [简体中文](README_cn.md)
 
 This repository contains some LXC tools (scripts) I wrote to supplement the limited functionality of the basic `lxc-*` command series.
 
